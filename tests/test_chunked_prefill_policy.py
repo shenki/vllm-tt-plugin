@@ -25,6 +25,7 @@ def _vllm_config(
     max_model_len: int = 16384,
     long_prefill_token_threshold: int = 512,
     max_num_scheduled_tokens: int | None = None,
+    is_multimodal_model: bool = False,
 ):
     return SimpleNamespace(
         scheduler_config=SimpleNamespace(
@@ -34,7 +35,10 @@ def _vllm_config(
             long_prefill_token_threshold=long_prefill_token_threshold,
             disable_chunked_mm_input=False,
         ),
-        model_config=SimpleNamespace(max_model_len=max_model_len),
+        model_config=SimpleNamespace(
+            max_model_len=max_model_len,
+            is_multimodal_model=is_multimodal_model,
+        ),
     )
 
 
@@ -48,7 +52,6 @@ def test_declared_support_keeps_chunked_prefill():
     _apply(config, {"supports_chunked_prefill": True})
 
     assert config.scheduler_config.enable_chunked_prefill is True
-    assert config.scheduler_config.disable_chunked_mm_input is True
 
 
 def test_declared_support_leaves_the_scheduler_budget_alone():
@@ -172,14 +175,12 @@ def test_block_output_model_loses_chunked_prefill_even_when_declared():
     assert config.scheduler_config.disable_chunked_mm_input is False
 
 
-def test_text_only_mamba_align_keeps_chunked_mm_input_enabled():
-    # Core sets mamba_cache_mode="align" for a checkpoint it classifies as
-    # hybrid when prefix caching is on, and VllmConfig then asserts chunked MM
-    # input stays allowed. The flag only governs multimodal items, so a
-    # text-only model keeps it off and stays servable with prefix caching.
-    config = _vllm_config()
-    config.cache_config = SimpleNamespace(mamba_cache_mode="align")
-    config.model_config.is_multimodal_model = False
+def test_text_only_model_keeps_chunked_mm_input_allowed():
+    # vLLM reads disable_chunked_mm_input only for multimodal items, and
+    # VllmConfig rejects it in mamba_cache_mode="align", which core picks with
+    # prefix caching on for a checkpoint it classifies as hybrid. Leaving the
+    # flag unset keeps such a text-only model servable with prefix caching.
+    config = _vllm_config(is_multimodal_model=False)
 
     _apply(config, {"supports_chunked_prefill": True})
 
@@ -187,11 +188,10 @@ def test_text_only_mamba_align_keeps_chunked_mm_input_enabled():
     assert config.scheduler_config.disable_chunked_mm_input is False
 
 
-def test_multimodal_mamba_align_still_disables_chunked_mm_input():
-    config = _vllm_config()
-    config.cache_config = SimpleNamespace(mamba_cache_mode="align")
-    config.model_config.is_multimodal_model = True
+def test_multimodal_model_disables_chunked_mm_input():
+    config = _vllm_config(is_multimodal_model=True)
 
     _apply(config, {"supports_chunked_prefill": True})
 
+    assert config.scheduler_config.enable_chunked_prefill is True
     assert config.scheduler_config.disable_chunked_mm_input is True
